@@ -1,0 +1,91 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Dialog Axiata",
+        "description": "Log in with your Dialog ID via SMS OTP to automatically discover and monitor your Mobile, Home Broadband, and Television connections.",
+        "data": {
+          "auth_method": "Authentication Method",
+          "mobile_number": "Dialog Mobile Number",
+          "cookies": "Session Cookie (Manual Fallback)",
+          "scan_interval": "Update Interval (Seconds)"
+        }
+      },
+      "otp": {
+        "title": "Enter Dialog SMS OTP",
+        "description": "A 6-digit verification code has been sent via SMS to {mobile}. Please enter it below to complete authentication.",
+        "data": {
+          "otp": "SMS Verification Code (OTP)"
+        }
+      },
+      "connections": {
+        "title": "Select Dialog Connections",
+        "description": "Choose which Dialog services and connections you wish to monitor in Home Assistant.",
+        "data": {
+          "selected_connections": "Connections"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate Dialog Session",
+        "description": "Your Dialog session has expired. A new verification OTP was sent to {mobile}. Enter it below to renew your session.",
+        "data": {
+          "otp": "Verification Code"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Dialog servers. Please check your internet connection and try again.",
+      "invalid_auth": "Invalid session cookie provided.",
+      "invalid_mobile": "Invalid Dialog mobile number format.",
+      "invalid_otp": "The OTP entered is incorrect or expired. Please check and try again.",
+      "empty_mobile": "Mobile number cannot be empty.",
+      "must_select_connection": "You must select at least one connection.",
+      "no_connections": "No active connections found under this Dialog ID.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Dialog connection or account is already configured.",
+      "reauth_successful": "Re-authentication was successful. Your session has been refreshed.",
+      "cannot_connect": "Failed to connect to Dialog servers."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Dialog Options",
+        "description": "Configure polling frequency.",
+        "data": {
+          "scan_interval": "Update Interval (Seconds)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "outstanding_balance": {
+        "name": "Outstanding Balance"
+      },
+      "last_bill_amount": {
+        "name": "Last Bill Amount"
+      },
+      "last_payment_amount": {
+        "name": "Last Payment Amount"
+      },
+      "payment_due_date": {
+        "name": "Payment Due Date"
+      },
+      "last_bill_date": {
+        "name": "Last Bill Date"
+      },
+      "status": {
+        "name": "Status"
+      },
+      "data_used": {
+        "name": "Data Used"
+      },
+      "data_remaining": {
+        "name": "Data Remaining"
+      }
+    }
+  }
+}

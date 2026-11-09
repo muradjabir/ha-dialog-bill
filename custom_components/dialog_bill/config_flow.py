@@ -128,7 +128,7 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         AUTH_METHOD_COOKIE: "Direct Session Cookie (Manual)",
                     }
                 ),
-                vol.Required(CONF_MOBILE_NUMBER, default="0771369338"): str,
+                vol.Required(CONF_MOBILE_NUMBER, default=""): str,
                 vol.Optional(CONF_SESSION_COOKIES, default=""): str,
                 vol.Optional(
                     CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
@@ -331,17 +331,39 @@ class DialogOptionsFlowHandler(config_entries.OptionsFlow):
             CONF_SCAN_INTERVAL,
             self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
         )
+        current_selected = self.config_entry.options.get(
+            CONF_SELECTED_CONNECTIONS,
+            self.config_entry.data.get(CONF_SELECTED_CONNECTIONS, []),
+        )
+
+        coordinator = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id)
+        conn_options: dict[str, str] = {}
+        if coordinator and coordinator.data:
+            for c_num, c_data in coordinator.data.items():
+                nick = c_data.get("nickName") or c_num
+                c_type = c_data.get("connectionType") or c_data.get("connection_type") or "POSTPAID"
+                conn_options[c_num] = f"{nick} ({c_type} - {c_num})"
+        for c_num in current_selected:
+            if c_num not in conn_options:
+                conn_options[c_num] = str(c_num)
+
+        schema_dict: dict[Any, Any] = {
+            vol.Optional(
+                CONF_SCAN_INTERVAL,
+                default=current_interval,
+            ): vol.All(vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL)),
+        }
+        if conn_options:
+            schema_dict[
+                vol.Required(
+                    CONF_SELECTED_CONNECTIONS,
+                    default=current_selected or list(conn_options.keys()),
+                )
+            ] = cv.multi_select(conn_options)
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_SCAN_INTERVAL,
-                        default=current_interval,
-                    ): vol.All(vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL)),
-                }
-            ),
+            data_schema=vol.Schema(schema_dict),
         )
 
 

@@ -53,9 +53,10 @@
     "step": {
       "init": {
         "title": "Dialog Options",
-        "description": "Configure polling frequency.",
+        "description": "Configure polling frequency and monitored connections.",
         "data": {
-          "scan_interval": "Update Interval (Seconds)"
+          "scan_interval": "Update Interval (Seconds)",
+          "selected_connections": "Monitored Connections"
         }
       }
     }

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from http.cookies import SimpleCookie
 import logging
 import re
 from typing import Any
 import urllib.parse
 
 import aiohttp
+from yarl import URL
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,6 +22,45 @@ class DialogAuthError(Exception):
 
 class DialogApiError(Exception):
     """Exception raised when API calls fail."""
+
+
+def _parse_amount(val: Any) -> float | None:
+    """Parse a currency string like 'Rs. 290.82' or '3,000.00' into a float."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, (int, float)):
+        return round(float(val), 2)
+    cleaned = re.sub(r"[^\d.-]", "", str(val).replace(",", ""))
+    # Strip leading dots if any (e.g. from 'Rs. 290.82')
+    cleaned = cleaned.lstrip(".")
+    if not cleaned:
+        return None
+    try:
+        return round(float(cleaned), 2)
+    except ValueError:
+        return None
+
+
+def _parse_data_to_gb(val: Any) -> float | None:
+    """Parse a data string like '4.26 GB' or '10 MB' into gigabytes."""
+    if val is None or val == "":
+        return None
+    val_str = str(val).strip().upper()
+    match = re.search(r"([\d.]+)\s*(TB|GB|MB|KB)?", val_str)
+    if not match:
+        return None
+    try:
+        num = float(match.group(1))
+    except ValueError:
+        return None
+    unit = match.group(2) or "GB"
+    if unit == "TB":
+        return round(num * 1024.0, 2)
+    if unit == "MB":
+        return round(num / 1024.0, 3)
+    if unit == "KB":
+        return round(num / (1024.0 * 1024.0), 4)
+    return round(num, 2)
 
 
 class DialogApiClient:
@@ -37,19 +78,58 @@ class DialogApiClient:
         self._mobile_number = mobile_number
         self.cookies_updated = False
 
+        # Seed aiohttp cookie jar with stored cookies so redirects work seamlessly
+        if self._cookies and hasattr(self._session, "cookie_jar"):
+            try:
+                self._session.cookie_jar.update_cookies(
+                    self._cookies, URL("https://dialog.lk/")
+                )
+            except Exception as err:
+                _LOGGER.debug("Could not seed cookie jar: %s", err)
+
     @property
     def cookies(self) -> dict[str, str]:
         """Return the current session cookies."""
         return self._cookies
 
+    def _extract_from_single_response(self, resp: aiohttp.ClientResponse) -> None:
+        """Extract cookies from a single ClientResponse and its raw Set-Cookie headers."""
+        for cookie in resp.cookies.values():
+            old_val = self._cookies.get(cookie.key)
+            if old_val != cookie.value:
+                self._cookies[cookie.key] = cookie.value
+                self.cookies_updated = True
+
+        for raw_header in resp.headers.getall("Set-Cookie", []):
+            sc = SimpleCookie()
+            try:
+                sc.load(raw_header)
+                for key, morsel in sc.items():
+                    old_val = self._cookies.get(key)
+                    if old_val != morsel.value:
+                        self._cookies[key] = morsel.value
+                        self.cookies_updated = True
+            except Exception:
+                pass
+
     def _extract_cookies(self, response: aiohttp.ClientResponse) -> None:
-        """Extract and store cookies from the response for sliding session renewal."""
-        if "Set-Cookie" in response.headers:
-            for cookie in response.cookies.values():
-                old_val = self._cookies.get(cookie.key)
-                if old_val != cookie.value:
-                    self._cookies[cookie.key] = cookie.value
-                    self.cookies_updated = True
+        """Extract and store cookies from redirect history, final response, and session jar."""
+        if response.history:
+            for hist_resp in response.history:
+                self._extract_from_single_response(hist_resp)
+
+        self._extract_from_single_response(response)
+
+        if hasattr(self._session, "cookie_jar"):
+            for domain_url in (URL("https://dialog.lk/"), URL("https://did.dialog.lk/")):
+                try:
+                    for cookie in self._session.cookie_jar.filter_cookies(domain_url).values():
+                        old_val = self._cookies.get(cookie.key)
+                        if old_val != cookie.value:
+                            self._cookies[cookie.key] = cookie.value
+                            self.cookies_updated = True
+                except Exception:
+                    pass
 
     async def async_start_login(self, mobile_number: str) -> dict[str, Any]:
         """Initiate Dialog ID SSO login and request SMS OTP.
@@ -57,7 +137,6 @@ class DialogApiClient:
         Returns a dictionary with 'session_data_key' and initial cookies.
         """
         clean_number = mobile_number.strip().replace(" ", "").replace("-", "")
-        # Standardize format for Dialog ID: 0771234567 or 771234567
         if clean_number.startswith("+94"):
             clean_number = "0" + clean_number[3:]
         elif clean_number.startswith("94"):
@@ -72,7 +151,6 @@ class DialogApiClient:
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         }
 
-        # Step 1: Start SSO redirect chain
         start_url = "https://dialog.lk/sso-login?language=en&destination=L215ZGlhbG9nLXdlYj9sYW5ndWFnZT1lbg=="
         try:
             async with self._session.get(start_url, headers=headers, allow_redirects=True) as resp:
@@ -84,7 +162,6 @@ class DialogApiClient:
 
         match = re.search(r'name=["\']sessionDataKey["\']\s+value=["\']([^"\']+)["\']', html)
         if not match:
-            # Check if sessionDataKey is in URL query parameters
             query = urllib.parse.parse_qs(urllib.parse.urlparse(final_url).query)
             if "sessionDataKey" in query:
                 session_data_key = query["sessionDataKey"][0]
@@ -93,7 +170,6 @@ class DialogApiClient:
         else:
             session_data_key = match.group(1)
 
-        # Step 2: Submit mobile number to trigger SMS OTP
         commonauth_url = "https://did.dialog.lk/commonauth"
         post_data = {
             "sessionDataKey": session_data_key,
@@ -120,20 +196,21 @@ class DialogApiClient:
         except Exception as err:
             raise DialogApiError(f"Failed to request OTP from Dialog ID: {err}") from err
 
-        # Verify that OTP was sent
         if "otp" not in otp_page_html.lower() and "otp" not in otp_final_url.lower():
             if "invalid" in otp_page_html.lower():
                 raise DialogAuthError("Invalid mobile number format for Dialog ID")
             raise DialogAuthError("Dialog ID did not return an OTP prompt page")
 
-        # Extract any refreshed sessionDataKey for step 2
-        sdk_match = re.search(r'name=["\']sessionDataKey["\']\s+id=["\']sessionDataKey["\']\s+value=["\']([^"\']+)["\']', otp_page_html)
+        sdk_match = re.search(
+            r'name=["\']sessionDataKey["\']\s+id=["\']sessionDataKey["\']\s+value=["\']([^"\']+)["\']',
+            otp_page_html,
+        )
         if sdk_match:
             session_data_key = sdk_match.group(1)
 
         return {
             "session_data_key": session_data_key,
-            "cookies": self._cookies,
+            "cookies": dict(self._cookies),
             "mobile_number": clean_number,
             "referer_url": otp_final_url,
         }
@@ -171,17 +248,18 @@ class DialogApiClient:
         except Exception as err:
             raise DialogApiError(f"Failed to submit OTP to Dialog ID: {err}") from err
 
-        # Check for errors in OTP submission
         if "invalid otp" in final_html.lower() or "incorrect" in final_html.lower():
             raise DialogAuthError("The OTP entered is incorrect or expired")
 
-        # Ensure we acquired the Drupal session cookie
-        has_ssess = any(k.startswith("SSESS") for k in self._cookies)
-        if not has_ssess and "dialog.lk" not in final_url:
+        has_auth = (
+            "self_token" in self._cookies
+            or any(k.startswith("SSESS") for k in self._cookies)
+        )
+        if not has_auth and "dialog.lk" not in final_url:
             raise DialogAuthError("Authentication succeeded but failed to acquire Dialog web session cookie")
 
         _LOGGER.debug("Dialog authentication successful, acquired session cookies")
-        return self._cookies
+        return dict(self._cookies)
 
     async def async_post_proxy(
         self,
@@ -256,7 +334,6 @@ class DialogApiClient:
         except Exception as err:
             _LOGGER.debug("pay-bill/get-configs check: %s", err)
 
-        # Fallback if primary mobile was configured and no list returned
         if not connections and self._mobile_number:
             connections[self._mobile_number] = {
                 "connection": self._mobile_number,
@@ -265,7 +342,6 @@ class DialogApiClient:
                 "isPrimary": True,
             }
 
-        # Enrich each connection with get-number-info
         enriched: list[dict[str, Any]] = []
         for conn_num, conn_data in connections.items():
             try:
@@ -280,18 +356,25 @@ class DialogApiClient:
         return enriched
 
     async def async_get_connection_data(self, connection_number: str) -> dict[str, Any]:
-        """Fetch all billing and usage metrics for a specific connection."""
+        """Fetch all billing, prepaid balance, and usage metrics for a specific connection."""
         data: dict[str, Any] = {
             "connection": connection_number,
+            "connection_type": "POSTPAID",
+            "lob": "GSM",
             "status": "Unknown",
-            "outstanding_balance": 0.0,
+            "package": None,
+            # Postpaid metrics
+            "outstanding_balance": None,
+            "current_usage": None,
             "last_bill_amount": None,
             "last_payment_amount": None,
             "payment_due_date": None,
             "last_bill_date": None,
             "last_payment_date": None,
-            "data_used_gb": None,
-            "data_total_gb": None,
+            # Prepaid metrics
+            "prepaid_balance": None,
+            "balance_expiry_date": None,
+            # Data quota metrics
             "data_remaining_gb": None,
         }
 
@@ -301,69 +384,150 @@ class DialogApiClient:
             if info_res.get("success") and isinstance(info_res.get("data"), dict):
                 info = info_res["data"]
                 data["status"] = info.get("connectionStatus") or ("Active" if info.get("isActive") else "Inactive")
-                data["connection_type"] = info.get("connectionType", "POSTPAID")
-                data["lob"] = info.get("drupalLob", "GSM")
+                data["connection_type"] = str(info.get("connectionType") or "POSTPAID").upper()
+                data["lob"] = info.get("drupalLob") or info.get("lob") or "GSM"
         except Exception as err:
             _LOGGER.debug("get-number-info error for %s: %s", connection_number, err)
 
-        # 2. Fetch current bill
+        # 2. Fetch dashboard navigation sections (for balance_summery_section & my_packages_section)
+        section_terms: dict[str, str] = {}
         try:
-            bill_res = await self.async_post_proxy("e-bill/get-current", {}, msisdn_header=connection_number)
-            if bill_res.get("success") and isinstance(bill_res.get("data"), dict):
-                bill_data = bill_res["data"]
-                curr_bill = bill_data.get("current_bill") or {}
-
-                def _parse_val(val: Any) -> float | None:
-                    if val is None or val == "":
-                        return None
-                    try:
-                        return float(str(val).replace(",", "").replace("LKR", "").replace("Rs", "").strip())
-                    except ValueError:
-                        return None
-
-                total_payable = _parse_val(bill_data.get("total_payable") or bill_data.get("total_payable_amount"))
-                if total_payable is not None:
-                    data["outstanding_balance"] = total_payable
-
-                bill_amt = _parse_val(curr_bill.get("amount") or curr_bill.get("bill_amount"))
-                if bill_amt is not None:
-                    data["last_bill_amount"] = bill_amt
-
-                last_pmt = _parse_val(bill_data.get("payments"))
-                if last_pmt is not None:
-                    data["last_payment_amount"] = last_pmt
-
-                data["payment_due_date"] = bill_data.get("due_date") or bill_data.get("pay_before")
-                data["last_bill_date"] = curr_bill.get("bill_date") or curr_bill.get("from_date")
-                data["bill_status"] = bill_data.get("bill_status")
+            nav_res = await self.async_post_proxy(
+                "dash/get-nav-config", {"nav_id": "492"}, msisdn_header=connection_number
+            )
+            if nav_res.get("success") and isinstance(nav_res.get("data"), dict):
+                for sec in nav_res["data"].get("sections") or []:
+                    sec_id = sec.get("id")
+                    term_id = sec.get("term_id")
+                    if sec_id:
+                        section_terms[sec_id] = str(term_id) if term_id is not None else "412"
         except Exception as err:
-            _LOGGER.debug("e-bill/get-current error for %s: %s", connection_number, err)
+            _LOGGER.debug("dash/get-nav-config error for %s: %s", connection_number, err)
 
-        # 3. Fetch data usage (Broadband or Mobile)
+        # 3. Fetch balance_summery_section (Prepaid Balance, Validity, and Data Remaining)
+        bal_term_id = section_terms.get(
+            "balance_summery_section",
+            "412" if data["connection_type"] == "PREPAID" else "443",
+        )
         try:
-            usage_res = await self.async_post_proxy("usage/get", {}, msisdn_header=connection_number)
-            if usage_res.get("success") and isinstance(usage_res.get("data"), dict):
-                u_data = usage_res["data"]
-                # Parse available GB and used GB
-                total = u_data.get("total_quota") or u_data.get("total")
-                used = u_data.get("used_quota") or u_data.get("used")
-                rem = u_data.get("remaining_quota") or u_data.get("remaining")
-
-                def _to_gb(val: Any) -> float | None:
-                    if val is None:
-                        return None
-                    try:
-                        v = float(re.sub(r"[^\d.]", "", str(val)))
-                        if "mb" in str(val).lower():
-                            return round(v / 1024.0, 2)
-                        return round(v, 2)
-                    except ValueError:
-                        return None
-
-                data["data_total_gb"] = _to_gb(total)
-                data["data_used_gb"] = _to_gb(used)
-                data["data_remaining_gb"] = _to_gb(rem)
+            bal_res = await self.async_post_proxy(
+                "dash/get-component-data",
+                {"nav_id": "492", "id": "balance_summery_section", "term_id": bal_term_id},
+                msisdn_header=connection_number,
+            )
+            if bal_res.get("success") and isinstance(bal_res.get("data"), dict):
+                tab_contents = bal_res["data"].get("tabContents") or []
+                for tab in tab_contents:
+                    tab_id = tab.get("id")
+                    cards = tab.get("cardData") or []
+                    if tab_id == "money" and cards:
+                        first_card = cards[0]
+                        amt = _parse_amount(first_card.get("middleLabel"))
+                        if amt is not None:
+                            data["prepaid_balance"] = amt
+                        bottom = str(first_card.get("bottomLabel") or "")
+                        if "valid till" in bottom.lower():
+                            exp_str = re.sub(r"(?i)valid\s+till\s*", "", bottom).strip()
+                            data["balance_expiry_date"] = exp_str
+                    elif tab_id == "data" and cards:
+                        total_rem_gb = 0.0
+                        found_data = False
+                        for card in cards:
+                            rem = _parse_data_to_gb(card.get("middleLabel"))
+                            if rem is not None:
+                                total_rem_gb += rem
+                                found_data = True
+                        if found_data:
+                            data["data_remaining_gb"] = round(total_rem_gb, 2)
         except Exception as err:
-            _LOGGER.debug("usage/get error for %s: %s", connection_number, err)
+            _LOGGER.debug("balance_summery_section error for %s: %s", connection_number, err)
+
+        # 4. Fetch my_packages_section (Tariff / Plan Name)
+        pkg_term_id = section_terms.get(
+            "my_packages_section",
+            "465" if data["connection_type"] == "PREPAID" else "471",
+        )
+        try:
+            pkg_res = await self.async_post_proxy(
+                "dash/get-component-data",
+                {"nav_id": "492", "id": "my_packages_section", "term_id": pkg_term_id},
+                msisdn_header=connection_number,
+            )
+            if pkg_res.get("success") and isinstance(pkg_res.get("data"), dict):
+                pkgs = pkg_res["data"].get("packages") or []
+                if pkgs and isinstance(pkgs[0], dict):
+                    pkg_name = pkgs[0].get("package_name")
+                    if pkg_name:
+                        data["package"] = str(pkg_name).strip()
+        except Exception as err:
+            _LOGGER.debug("my_packages_section error for %s: %s", connection_number, err)
+
+        # 5. Connection-type specific endpoints
+        if data["connection_type"] == "PREPAID":
+            # Fallback to addon/get-balance if prepaid_balance wasn't found in balance_summery_section
+            if data["prepaid_balance"] is None:
+                try:
+                    addon_bal = await self.async_post_proxy(
+                        "addon/get-balance", {}, msisdn_header=connection_number
+                    )
+                    if addon_bal.get("success"):
+                        amt = _parse_amount(addon_bal.get("data"))
+                        if amt is not None:
+                            data["prepaid_balance"] = amt
+                except Exception as err:
+                    _LOGGER.debug("addon/get-balance error for %s: %s", connection_number, err)
+        else:
+            # Postpaid: Fetch current bill & payment history
+            try:
+                bill_res = await self.async_post_proxy(
+                    "e-bill/get-current", {}, msisdn_header=connection_number
+                )
+                if bill_res.get("success") and isinstance(bill_res.get("data"), dict):
+                    bill_data = bill_res["data"]
+                    curr_bill = bill_data.get("current_bill") or {}
+                    prev_bill = bill_data.get("previous_bill") or {}
+
+                    total_payable = _parse_amount(
+                        bill_data.get("total_payable") or bill_data.get("total_payable_amount")
+                    )
+                    if total_payable is not None:
+                        data["outstanding_balance"] = total_payable
+
+                    curr_usage = _parse_amount(curr_bill.get("amount") or curr_bill.get("bill_amount"))
+                    if curr_usage is not None:
+                        data["current_usage"] = curr_usage
+
+                    prev_amt = _parse_amount(prev_bill.get("amount"))
+                    if prev_amt is not None:
+                        data["last_bill_amount"] = prev_amt
+                    elif curr_usage is not None:
+                        data["last_bill_amount"] = curr_usage
+
+                    last_pmt = _parse_amount(bill_data.get("payments"))
+                    if last_pmt is not None:
+                        data["last_payment_amount"] = last_pmt
+
+                    data["payment_due_date"] = bill_data.get("pay_before") or bill_data.get("due_date")
+                    data["last_bill_date"] = (
+                        curr_bill.get("from_date")
+                        or curr_bill.get("bill_date")
+                        or bill_data.get("due_date")
+                    )
+                    data["bill_status"] = bill_data.get("bill_status")
+            except Exception as err:
+                _LOGGER.debug("e-bill/get-current error for %s: %s", connection_number, err)
+
+            try:
+                pmt_res = await self.async_post_proxy(
+                    "payment-history/read", {}, msisdn_header=connection_number
+                )
+                if pmt_res.get("success") and isinstance(pmt_res.get("data"), list) and pmt_res["data"]:
+                    latest_pmt = pmt_res["data"][0]
+                    if isinstance(latest_pmt, dict):
+                        data["last_payment_date"] = latest_pmt.get("date")
+                        if data["last_payment_amount"] is None:
+                            data["last_payment_amount"] = _parse_amount(latest_pmt.get("amount"))
+            except Exception as err:
+                _LOGGER.debug("payment-history/read error for %s: %s", connection_number, err)
 
         return data

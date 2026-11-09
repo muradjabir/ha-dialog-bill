@@ -17,16 +17,22 @@ This custom component communicates with the official [MyDialog Web & Dialog ID](
   - **Home Broadband:** 4G / 5G Home WiFi routers (HBB).
   - **Dialog Television:** DTV satellite/cable connections.
 - **Dedicated Device per Connection:** Each service is represented as an individual device in Home Assistant, grouping its respective billing and data sensors.
-- **Comprehensive Billing Tracking:**
-  - `Outstanding Balance` (in `LKR`, `monetary` device class, `total` state class)
-  - `Last Bill Amount` (in `LKR`)
-  - `Last Payment Amount` (in `LKR`)
-  - `Payment Due Date` (as a `date` entity)
-  - `Last Bill Date` (as a `date` entity)
-  - `Connection Status` (e.g. `Connected`, `Active`)
-- **Broadband & Mobile Data Monitoring:**
-  - `Data Used` (in `GB`, `data_size` device class)
-  - `Data Remaining` (in `GB`)
+- **Connection-Aware Sensors (Postpaid vs. Prepaid):**
+  - **Postpaid Connections:**
+    - `Outstanding Balance` (in `LKR`, `monetary` device class, `total` state class)
+    - `Current Usage` (unbilled usage in `LKR`)
+    - `Last Bill Amount` (in `LKR`)
+    - `Last Payment Amount` (in `LKR`)
+    - `Payment Due Date` (as a `date` entity)
+    - `Last Bill Date` (as a `date` entity)
+    - `Last Payment Date` (as a `date` entity)
+  - **Prepaid Connections:**
+    - `Prepaid Balance` (remaining reload credit in `LKR`)
+    - `Balance Expiry Date` (credit validity date as a `date` entity)
+  - **Common Sensors (All Connections):**
+    - `Data Remaining` (in `GB`, `data_size` device class)
+    - `Package` (active base tariff plan, e.g. `MY PLAN 360`, `1 FOR 1`)
+    - `Connection Status` (e.g. `Connected`, `Active`)
 - **Sliding Session Renewal & Persistence:** Uses Dialog's 23-day sliding session token window. Every periodic update automatically renews the sliding session on Dialog's servers and dynamically persists the refreshed credentials in Home Assistant, preventing tokens from expiring and avoiding repetitive OTP verification requests.
 - **Seamless 2-Step OTP Authentication:** Log in directly from the Home Assistant UI by entering your mobile number and confirming the SMS OTP. Manual session cookie fallback is also supported.
 
@@ -135,3 +141,4 @@ action:
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+

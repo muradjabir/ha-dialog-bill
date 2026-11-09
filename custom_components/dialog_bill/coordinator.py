@@ -71,7 +71,15 @@ class DialogDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]
                     meta = available_conns[conn_num]
                     conn_data["nickName"] = meta.get("nickName") or meta.get("connection")
                     conn_data["isPrimary"] = meta.get("isPrimary", False)
-                    conn_data["connectionType"] = meta.get("connectionType", conn_data.get("connection_type", "POSTPAID"))
+                    c_type = str(
+                        meta.get("connectionType")
+                        or conn_data.get("connection_type")
+                        or "POSTPAID"
+                    ).upper()
+                    conn_data["connectionType"] = c_type
+                    conn_data["connection_type"] = c_type
+                    conn_data["drupalLob"] = meta.get("drupalLob") or conn_data.get("lob") or "GSM"
+                    conn_data["ddsLob"] = meta.get("ddsLob") or conn_data.get("lob") or "GSM"
                 results[conn_num] = conn_data
 
             # 2. Dynamic sliding session persistence:
@@ -93,3 +101,4 @@ class DialogDataUpdateCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]
             raise UpdateFailed(f"Dialog API error: {err}") from err
         except Exception as err:
             raise UpdateFailed(f"Unexpected error updating Dialog data: {err}") from err
+

@@ -65,6 +65,9 @@
       "outstanding_balance": {
         "name": "Outstanding Balance"
       },
+      "current_usage": {
+        "name": "Current Usage"
+      },
       "last_bill_amount": {
         "name": "Last Bill Amount"
       },
@@ -77,14 +80,26 @@
       "last_bill_date": {
         "name": "Last Bill Date"
       },
-      "status": {
-        "name": "Status"
+      "last_payment_date": {
+        "name": "Last Payment Date"
+      },
+      "prepaid_balance": {
+        "name": "Prepaid Balance"
+      },
+      "balance_expiry_date": {
+        "name": "Balance Expiry Date"
       },
       "data_used": {
         "name": "Data Used"
       },
       "data_remaining": {
         "name": "Data Remaining"
+      },
+      "package": {
+        "name": "Package"
+      },
+      "status": {
+        "name": "Connection Status"
       }
     }
   }

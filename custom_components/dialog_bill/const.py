@@ -14,3 +14,4 @@ AUTH_METHOD_COOKIE = "cookie"
 
 DEFAULT_SCAN_INTERVAL = 7200  # 2 hours in seconds
 MIN_SCAN_INTERVAL = 3600      # 1 hour minimum to avoid aggressive polling
+

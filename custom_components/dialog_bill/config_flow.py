@@ -347,3 +347,4 @@ class DialogOptionsFlowHandler(config_entries.OptionsFlow):
 
 class NoConnectionsFound(HomeAssistantError):
     """Error to indicate no connections found for this account."""
+

@@ -298,11 +298,10 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     referer_url=self._login_state.get("referer_url"),
                 )
                 reauth_entry = self._get_reauth_entry()
-                new_data = dict(reauth_entry.data)
-                new_data[CONF_SESSION_COOKIES] = verified_cookies
-                self.hass.config_entries.async_update_entry(reauth_entry, data=new_data)
-                await self.hass.config_entries.async_reload(reauth_entry.entry_id)
-                return self.async_abort(reason="reauth_successful")
+                return self.async_update_reload_and_abort(
+                    reauth_entry,
+                    data_updates={CONF_SESSION_COOKIES: verified_cookies},
+                )
             except DialogAuthError:
                 errors["base"] = "invalid_otp"
             except Exception:

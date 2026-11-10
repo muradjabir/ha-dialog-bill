@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import logging
 
+from aiohttp import CookieJar
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import DialogApiClient
 from .const import CONF_MOBILE_NUMBER, CONF_SESSION_COOKIES, DOMAIN
@@ -22,7 +24,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Dialog Bill from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    session = async_get_clientsession(hass)
+    session = async_create_clientsession(
+        hass,
+        cookie_jar=CookieJar(unsafe=True),
+    )
     cookies = entry.data.get(CONF_SESSION_COOKIES, {})
     mobile_number = entry.data.get(CONF_MOBILE_NUMBER)
 
@@ -39,8 +44,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-
     return True
 
 
@@ -51,9 +54,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN].pop(entry.entry_id, None)
 
     return unload_ok
-
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    await hass.config_entries.async_reload(entry.entry_id)
 

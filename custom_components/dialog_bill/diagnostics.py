@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_MOBILE_NUMBER,
+    CONF_SELECTED_CONNECTIONS,
     CONF_SESSION_COOKIES,
     CONF_SESSION_DATA_KEY,
     DOMAIN,
@@ -18,11 +19,19 @@ from .coordinator import DialogDataUpdateCoordinator
 
 TO_REDACT = {
     CONF_MOBILE_NUMBER,
+    CONF_SELECTED_CONNECTIONS,
     CONF_SESSION_COOKIES,
     CONF_SESSION_DATA_KEY,
     "address",
-    "self_token",
+    "connection",
+    "cookies",
     "JSESSIONID",
+    "mobile_number",
+    "nickName",
+    "selected_connections",
+    "self_token",
+    "title",
+    "unique_id",
 }
 
 

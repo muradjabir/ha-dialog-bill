@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from aiohttp import CookieJar
 import voluptuous as vol
 
 from homeassistant import config_entries
@@ -12,7 +13,7 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.exceptions import HomeAssistantError
 import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import DialogApiClient, DialogApiError, DialogAuthError
 from .const import (
@@ -42,6 +43,16 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._auth_data: dict[str, Any] = {}
         self._login_state: dict[str, Any] = {}
         self._discovered_connections: list[dict[str, Any]] = []
+        self._session = None
+
+    def _get_session(self):
+        """Get or create a temporary client session for this config flow."""
+        if self._session is None or self._session.closed:
+            self._session = async_create_clientsession(
+                self.hass,
+                cookie_jar=CookieJar(unsafe=True),
+            )
+        return self._session
 
     @staticmethod
     @callback
@@ -58,7 +69,7 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            session = async_get_clientsession(self.hass)
+            session = self._get_session()
             auth_method = user_input.get(CONF_AUTH_METHOD, AUTH_METHOD_OTP)
 
             if auth_method == AUTH_METHOD_OTP:
@@ -148,7 +159,7 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             otp = user_input.get("otp", "").strip()
-            session = async_get_clientsession(self.hass)
+            session = self._get_session()
             client = DialogApiClient(
                 session=session,
                 cookies=self._login_state.get("cookies", {}),
@@ -263,7 +274,7 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle re-authentication triggered when a session eventually expires."""
         mobile = entry_data.get(CONF_MOBILE_NUMBER, "")
-        session = async_get_clientsession(self.hass)
+        session = self._get_session()
         client = DialogApiClient(session=session)
 
         try:
@@ -284,7 +295,7 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             otp = user_input.get("otp", "").strip()
-            session = async_get_clientsession(self.hass)
+            session = self._get_session()
             client = DialogApiClient(
                 session=session,
                 cookies=self._login_state.get("cookies", {}),
@@ -316,7 +327,7 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
 
-class DialogOptionsFlowHandler(config_entries.OptionsFlow):
+class DialogOptionsFlowHandler(config_entries.OptionsFlowWithReload):
     """Handle options for Dialog Bill integration."""
 
     async def async_step_init(

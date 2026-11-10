@@ -36,3 +36,4 @@ async def async_get_config_entry_diagnostics(
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
         "data": async_redact_data(coordinator.data, TO_REDACT),
     }
+

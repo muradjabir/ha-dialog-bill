@@ -45,11 +45,23 @@ class DialogConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_connections: list[dict[str, Any]] = []
         self._session = None
 
+    def _cleanup_session(self) -> None:
+        """Detach temporary flow session."""
+        if self._session is not None:
+            if not self._session.closed:
+                self._session.detach()
+            self._session = None
+
+    def __del__(self) -> None:
+        """Cleanup session on garbage collection."""
+        self._cleanup_session()
+
     def _get_session(self):
         """Get or create a temporary client session for this config flow."""
         if self._session is None or self._session.closed:
             self._session = async_create_clientsession(
                 self.hass,
+                auto_cleanup=False,
                 cookie_jar=CookieJar(unsafe=True),
             )
         return self._session

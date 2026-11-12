@@ -84,6 +84,16 @@ class DialogApiClient:
                 self._session.cookie_jar.update_cookies(
                     self._cookies, URL("https://dialog.lk/")
                 )
+                did_keys = {"commonAuthId", "opbs", "JSESSIONID"}
+                did_cookies = {
+                    k: v
+                    for k, v in self._cookies.items()
+                    if k in did_keys or "incap" in k
+                }
+                if did_cookies:
+                    self._session.cookie_jar.update_cookies(
+                        did_cookies, URL("https://did.dialog.lk/")
+                    )
             except Exception as err:
                 _LOGGER.debug("Could not seed cookie jar: %s", err)
 
@@ -121,7 +131,9 @@ class DialogApiClient:
         self._extract_from_single_response(response)
 
         if hasattr(self._session, "cookie_jar"):
-            for domain_url in (URL("https://dialog.lk/"), URL("https://did.dialog.lk/")):
+            # Check did.dialog.lk first, and dialog.lk second so that dialog.lk's
+            # portal cookies (self_token, SSESS) take final precedence.
+            for domain_url in (URL("https://did.dialog.lk/"), URL("https://dialog.lk/")):
                 try:
                     for cookie in self._session.cookie_jar.filter_cookies(domain_url).values():
                         old_val = self._cookies.get(cookie.key)
@@ -261,11 +273,49 @@ class DialogApiClient:
         _LOGGER.debug("Dialog authentication successful, acquired session cookies")
         return dict(self._cookies)
 
+    async def async_refresh_sso_session(self) -> bool:
+        """Silently refresh Dialog session tokens via did.dialog.lk SSO without requiring an OTP."""
+        _LOGGER.debug("Attempting silent Dialog SSO token refresh...")
+        sso_url = "https://dialog.lk/sso-login?language=en&destination=L215ZGlhbG9nLXdlYj9sYW5ndWFnZT1lbg=="
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
+        try:
+            if hasattr(self._session, "cookie_jar"):
+                self._session.cookie_jar.update_cookies(self._cookies, URL("https://dialog.lk/"))
+                did_keys = {"commonAuthId", "opbs", "JSESSIONID"}
+                did_cookies = {
+                    k: v
+                    for k, v in self._cookies.items()
+                    if k in did_keys or "incap" in k
+                }
+                if did_cookies:
+                    self._session.cookie_jar.update_cookies(did_cookies, URL("https://did.dialog.lk/"))
+
+            async with self._session.get(
+                sso_url, headers=headers, allow_redirects=True
+            ) as resp:
+                self._extract_cookies(resp)
+                final_url = str(resp.url)
+                if "mydialog-web" in final_url and (
+                    "self_token" in self._cookies
+                    or any(k.startswith("SSESS") for k in self._cookies)
+                ):
+                    _LOGGER.info("Successfully refreshed Dialog SSO session token silently")
+                    return True
+                _LOGGER.debug("SSO refresh ended at non-target URL: %s", final_url)
+        except Exception as err:
+            _LOGGER.debug("Silent Dialog SSO token refresh failed: %s", err)
+
+        return False
+
     async def async_post_proxy(
         self,
         route: str,
         payload: dict[str, Any] | None = None,
         msisdn_header: str | None = None,
+        is_retry: bool = False,
     ) -> dict[str, Any]:
         """Send an authenticated POST request to /selfcare-proxy?r=<route>."""
         url = f"https://dialog.lk/selfcare-proxy?r={route}"
@@ -282,16 +332,33 @@ class DialogApiClient:
         data = payload if payload is not None else {}
 
         try:
+            cookies_kwarg = None if hasattr(self._session, "cookie_jar") else self._cookies
             async with self._session.post(
                 url,
                 json=data,
                 headers=headers,
-                cookies=self._cookies,
+                cookies=cookies_kwarg,
             ) as resp:
                 self._extract_cookies(resp)
                 if resp.status == 403:
                     body = await resp.text()
-                    if "Token not found" in body or "Forbidden" in body:
+                    is_auth_error = (
+                        "Token not found" in body
+                        or "Session not found" in body
+                        or "Forbidden" in body
+                    )
+                    if is_auth_error and not is_retry:
+                        _LOGGER.info(
+                            "Dialog API session token expired; attempting silent SSO session renewal"
+                        )
+                        if await self.async_refresh_sso_session():
+                            return await self.async_post_proxy(
+                                route, payload, msisdn_header, is_retry=True
+                            )
+                        raise DialogAuthError(
+                            "Session expired and silent renewal failed. Please re-authenticate."
+                        )
+                    if is_auth_error:
                         raise DialogAuthError("Session expired or invalid. Please re-authenticate.")
                     raise DialogApiError(f"Dialog API Forbidden (403): {body}")
                 if resp.status != 200:

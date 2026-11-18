@@ -41,8 +41,15 @@ async def async_get_config_entry_diagnostics(
     """Return diagnostics for a config entry."""
     coordinator: DialogDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
+    data: dict[str, Any] = {}
+    if isinstance(coordinator.data, dict):
+        for idx, conn_data in enumerate(coordinator.data.values(), 1):
+            data[f"connection_{idx}"] = async_redact_data(conn_data, TO_REDACT)
+    elif coordinator.data is not None:
+        data = async_redact_data(coordinator.data, TO_REDACT)
+
     return {
         "entry": async_redact_data(entry.as_dict(), TO_REDACT),
-        "data": async_redact_data(coordinator.data, TO_REDACT),
+        "data": data,
     }
 
